@@ -1,4 +1,10 @@
 import os
+import warnings
+
+# Suppress Vertex AI deprecation warnings globally
+warnings.filterwarnings("ignore", category=UserWarning, module="vertexai")
+warnings.filterwarnings("ignore", category=UserWarning, module="google.cloud.aiplatform")
+
 from google.cloud import discoveryengine_v1alpha as discoveryengine
 import vertexai
 from vertexai.generative_models import GenerativeModel
