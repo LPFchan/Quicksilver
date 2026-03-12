@@ -2,6 +2,7 @@ import os
 
 from google.cloud import discoveryengine_v1alpha as discoveryengine
 from google import genai
+from google.genai import errors as genai_errors
 import time
 from dotenv import load_dotenv
 
@@ -88,6 +89,8 @@ class VertexAISearchClient:
                     )
                     response = chat.send_message(query)
                     return response.text
+            except genai_errors.ClientError:
+                raise
             except Exception as e:
                 raise Exception(f"Failed to generate content using {model_name}: {e}")
 

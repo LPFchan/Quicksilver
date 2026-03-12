@@ -8,6 +8,7 @@ import time
 import uuid
 
 from gcp_client import VertexAISearchClient
+from google.genai.errors import ClientError as GenAIClientError
 
 import uvicorn
 import os
@@ -143,14 +144,23 @@ async def chat_completions(request: ChatCompletionRequest):
     try:
         # Call configured GCP backend
         backend_response = vertex_client.converse(
-            query=query, 
+            query=query,
             history=history,
-            requested_model=request.model, 
+            requested_model=request.model,
             stream=request.stream
         )
 
         response_id = f"chatcmpl-{uuid.uuid4().hex}"
         created_time = int(time.time())
+
+        # If the client requested a streaming response, pre-flight the stream so any
+        # upstream error (e.g. 429) is raised before we send 200 OK.
+        stream_first_chunk = None
+        if request.stream and not isinstance(backend_response, str):
+            try:
+                stream_first_chunk = next(backend_response)
+            except StopIteration:
+                pass
 
         # If the client requested a streaming response, we need to return server-sent events (SSE)
         if request.stream:
@@ -164,7 +174,7 @@ async def chat_completions(request: ChatCompletionRequest):
                     "choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}]
                 }
                 yield f"data: {json.dumps(chunk)}\n\n"
-                
+
                 # Check if backend_response is a string (Discovery Engine fallback) or a generator (GenAI SDK)
                 if isinstance(backend_response, str):
                     chunk = {
@@ -176,7 +186,17 @@ async def chat_completions(request: ChatCompletionRequest):
                     }
                     yield f"data: {json.dumps(chunk)}\n\n"
                 else:
-                    # It's a true stream from GenAI SDK
+                    # Yield the first chunk we consumed during pre-flight (if any)
+                    if stream_first_chunk is not None and getattr(stream_first_chunk, "text", None):
+                        chunk = {
+                            "id": response_id,
+                            "object": "chat.completion.chunk",
+                            "created": created_time,
+                            "model": request.model,
+                            "choices": [{"index": 0, "delta": {"content": stream_first_chunk.text}, "finish_reason": None}]
+                        }
+                        yield f"data: {json.dumps(chunk)}\n\n"
+                    # Then the rest of the stream
                     for response_chunk in backend_response:
                         if response_chunk.text:
                             chunk = {
@@ -187,7 +207,7 @@ async def chat_completions(request: ChatCompletionRequest):
                                 "choices": [{"index": 0, "delta": {"content": response_chunk.text}, "finish_reason": None}]
                             }
                             yield f"data: {json.dumps(chunk)}\n\n"
-                
+
                 # Send the final stop chunk
                 chunk = {
                     "id": response_id,
@@ -224,6 +244,12 @@ async def chat_completions(request: ChatCompletionRequest):
             )
         )
         
+    except GenAIClientError as e:
+        status_code = getattr(e, "code", 500)
+        if not isinstance(status_code, int) or status_code < 400:
+            status_code = 500
+        print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Vertex AI error ({status_code}): {e}")
+        raise HTTPException(status_code=status_code, detail=str(e))
     except Exception as e:
         print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Error calling Vertex AI Search: {e}")
         raise HTTPException(status_code=500, detail=str(e))
