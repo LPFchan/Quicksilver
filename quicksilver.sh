@@ -7,6 +7,9 @@ echo "=================================================="
 echo ""
 
 # Ensure we are in the right directory and venv is set up
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+cd "$SCRIPT_DIR"
+
 if [ ! -d "venv" ]; then
     echo "Creating virtual environment and installing dependencies..."
     python3 -m venv venv
@@ -54,8 +57,9 @@ if [ "$BACKEND_CHOICE" == "1" ]; then
     echo ""
     echo "Fetching available Gemini models for your project..."
     
-    # Run the helper script to fetch models
-    MODEL_LIST=$(python fetch_models.py "$PROJECT_ID" "$LOCATION")
+    # Run the helper script to fetch models (ensuring we use absolute paths relative to script location)
+    SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+    MODEL_LIST=$(python "$SCRIPT_DIR/fetch_models.py" "$PROJECT_ID" "$LOCATION")
     
     if [ $? -ne 0 ]; then
         echo "❌ Error fetching models."
@@ -65,7 +69,8 @@ if [ "$BACKEND_CHOICE" == "1" ]; then
     echo "$MODEL_LIST"
     
     # Parse the output to create an array of models
-    IFS=$'\n' read -r -d '' -a model_array <<< "$(echo "$MODEL_LIST" | grep -E '^[0-9]+\)' | sed 's/^[0-9]*\) //')"
+    # Using basic sed that works identically on both GNU (Linux) and BSD (macOS)
+    IFS=$'\n' read -r -d '' -a model_array <<< "$(echo "$MODEL_LIST" | grep '^[0-9]' | sed 's/^[0-9][0-9]*[)] //')"
     
     echo ""
     read -p "Select a model by number: " MODEL_INDEX
@@ -110,4 +115,4 @@ echo "=================================================="
 echo ""
 
 # Run the server
-python main.py
+python "$SCRIPT_DIR/main.py"
