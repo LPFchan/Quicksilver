@@ -100,7 +100,18 @@ class VertexAISearchClient:
                 tool_instruction += "<tool_call>\n{\"name\": \"tool_name\", \"arguments\": {\"arg1\": \"val1\"}}\n</tool_call>"
 
             # Combine it all into the single query Vertex AI Search expects
-            final_query = f"{system_prompt.strip()}\n\nConversation History:\n{conversation_history}{tool_instruction}".strip()
+            # Discovery Engine is highly sensitive to the term "Conversation History" when using the converse API,
+            # as it automatically injects its own conversation history based on the session ID. Let's just pass the query.
+            
+            user_queries = [msg.get("content", "") for msg in messages if msg.get("role") == "user"]
+            last_query = user_queries[-1] if user_queries else "Hello"
+            
+            final_query = f"{last_query}"
+            
+            # Print the final query being sent to Discovery Engine so we can debug what is actually going on.
+            print("==================== DEBUG: SENDING QUERY ====================")
+            print(final_query)
+            print("==============================================================")
 
             if not hasattr(self, "search_client"):
                 raise Exception("Vertex AI Search client is not initialized. Check your environment variables (DATA_STORE_ID).")
@@ -108,10 +119,21 @@ class VertexAISearchClient:
             conversation_id = "-"  # auto session mode: API creates a new conversation
             conversation_name = self.conversation_path_format.format(conversation_id)
             query_obj = discoveryengine.TextInput(input=final_query)
+            
+            # The summary_spec configuration allows us to dictate how the summary is generated.
+            # We set these to True to bypass Google's internal checks that often decide a query
+            # doesn't "deserve" a summary, which is what causes the "A summary could not be generated" error.
+            summary_spec = discoveryengine.SearchRequest.ContentSearchSpec.SummarySpec(
+                summary_result_count=5,
+                ignore_adversarial_query=False,
+                ignore_non_summary_seeking_query=False,
+            )
+            
             request = discoveryengine.ConverseConversationRequest(
                 name=conversation_name,
                 query=query_obj,
                 serving_config=self.serving_config,
+                summary_spec=summary_spec
             )
             response = self.search_client.converse_conversation(request)
             text_reply = "I'm sorry, I couldn't generate an answer from the provided documents."
@@ -119,6 +141,20 @@ class VertexAISearchClient:
                 text_reply = response.reply.reply
             elif response.reply and hasattr(response.reply, "summary") and response.reply.summary.summary_text:
                 text_reply = response.reply.summary.summary_text
+
+            # Debug the full response
+            print("==================== DEBUG: RESPONSE FROM DISCOVERY ENGINE ====================")
+            print(f"Reply text: {text_reply}")
+            print(f"Has Search Results: {bool(getattr(response, 'search_results', None) or getattr(response, 'searchResults', None))}")
+            if hasattr(response.reply, "summary") and response.reply.summary:
+                try:
+                    summary = response.reply.summary
+                    print(f"Summary with properties: {dir(summary)}")
+                    print(f"summary_skipped_reasons: {getattr(summary, 'summary_skipped_reasons', 'N/A')}")
+                    print(f"safety_attributes: {getattr(summary, 'safety_attributes', 'N/A')}")
+                except Exception as e:
+                    print(f"Debug error: {e}")
+            print("===============================================================================")
 
             # When the API skips the LLM summary it returns a fallback message; append actual search results so the user sees them
             summary_skipped = "summary could not be generated" in text_reply.lower() or "here are some search results" in text_reply.lower()
