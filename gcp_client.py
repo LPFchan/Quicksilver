@@ -6,8 +6,7 @@ warnings.filterwarnings("ignore", category=UserWarning, module="vertexai")
 warnings.filterwarnings("ignore", category=UserWarning, module="google.cloud.aiplatform")
 
 from google.cloud import discoveryengine_v1alpha as discoveryengine
-import vertexai
-from vertexai.generative_models import GenerativeModel
+from google import genai
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -15,7 +14,7 @@ load_dotenv()
 class VertexAISearchClient:
     def __init__(self):
         self.project_id = os.getenv("GOOGLE_CLOUD_PROJECT")
-        self.location = os.getenv("LOCATION", "global")
+        self.location = os.getenv("LOCATION", "us-central1")
         self.backend = os.getenv("QUICKSILVER_BACKEND", "DISCOVERY_ENGINE")
         
         if not self.project_id:
@@ -28,32 +27,26 @@ class VertexAISearchClient:
                 print("Warning: DATA_STORE_ID not set. Vertex AI Search backend will fail.")
                 return
                 
-            self.client = discoveryengine.ConversationalSearchServiceClient()
-            self.session_path_format = f"projects/{self.project_id}/locations/{self.location}/collections/default_collection/dataStores/{self.data_store_id}/sessions/{{}}"
-            self.serving_config = f"projects/{self.project_id}/locations/{self.location}/collections/default_collection/dataStores/{self.data_store_id}/servingConfigs/default_config"
+            self.search_client = discoveryengine.ConversationalSearchServiceClient()
+            self.session_path_format = f"projects/{self.project_id}/locations/global/collections/default_collection/dataStores/{self.data_store_id}/sessions/{{}}"
+            self.serving_config = f"projects/{self.project_id}/locations/global/collections/default_collection/dataStores/{self.data_store_id}/servingConfigs/default_config"
             print(f"Initialized Quicksilver with Vertex AI Search (Data Store: {self.data_store_id})")
             
         elif self.backend == "GENERATIVE_MODELS":
-            # In Generative Models mode, the model itself is passed dynamically from main.py 
-            # based on the user's OpenAI API request (or the default set in .env).
-            vertexai.init(project=self.project_id, location=self.location)
+            self.genai_client = genai.Client(
+                vertexai=True, 
+                project=self.project_id, 
+                location=self.location
+            )
             self.default_model = os.getenv("DEFAULT_MODEL", "gemini-2.5-pro")
-            print(f"Initialized Quicksilver with Vertex AI Generative Models (Default: {self.default_model})")
+            print(f"Initialized Quicksilver with Google GenAI SDK (Default: {self.default_model})")
 
-    def converse(self, query: str, session_id: str = "-", requested_model: str = None):
+    def converse(self, query: str, session_id: str = "-", requested_model: str = None, stream: bool = False):
         """
         Sends a query to the configured backend.
-        
-        Args:
-            query (str): The user's question.
-            session_id (str): Optional session ID (used for Discovery Engine).
-            requested_model (str): The model specified in the OpenAI request.
-            
-        Returns:
-            The conversational response string.
         """
         if self.backend == "DISCOVERY_ENGINE":
-            if not hasattr(self, 'client'):
+            if not hasattr(self, 'search_client'):
                 raise Exception("Vertex AI Search client is not initialized. Check your environment variables.")
 
             session = self.session_path_format.format(session_id)
@@ -65,7 +58,7 @@ class VertexAISearchClient:
                 serving_config=self.serving_config,
             )
             
-            response = self.client.converse_conversation(request)
+            response = self.search_client.converse_conversation(request)
             
             if response.reply and response.reply.reply:
                 return response.reply.reply
@@ -77,12 +70,20 @@ class VertexAISearchClient:
         elif self.backend == "GENERATIVE_MODELS":
             # If the user passes a model name that doesn't start with "gemini-", they are likely 
             # just passing their proxy's generic route name (like "quicksilver").
-            # In that case, we should fallback to the default model configured in .env.
             model_name = requested_model if requested_model and requested_model.startswith("gemini-") else self.default_model
             try:
-                model = GenerativeModel(model_name)
-                response = model.generate_content(query)
-                return response.text
+                if stream:
+                    # Return the generator directly for streaming
+                    return self.genai_client.models.generate_content_stream(
+                        model=model_name,
+                        contents=query
+                    )
+                else:
+                    response = self.genai_client.models.generate_content(
+                        model=model_name,
+                        contents=query
+                    )
+                    return response.text
             except Exception as e:
                 raise Exception(f"Failed to generate content using {model_name}: {e}")
 

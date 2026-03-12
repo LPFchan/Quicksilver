@@ -1,19 +1,18 @@
-import vertexai
-from vertexai.generative_models import GenerativeModel
+from google import genai
 import sys
 import os
+import google.auth
 
-# Suppress standard error output so we don't clutter the terminal with deprecation warnings
+# Suppress standard error output so we don't clutter the terminal
 import warnings
 warnings.filterwarnings("ignore")
 
 def fetch_models(project_id, location):
     try:
-        vertexai.init(project=project_id, location=location)
+        credentials, current_project = google.auth.default()
+        client = genai.Client(vertexai=True, project=project_id, location=location)
         
         # A list of known models to test. 
-        # (Vertex API does not have a simple "list all allowed base models" endpoint 
-        # that reliably works without special permissions, so we probe the known list).
         models_to_test = [
             "gemini-2.0-flash",
             "gemini-2.0-flash-lite",
@@ -36,9 +35,11 @@ def fetch_models(project_id, location):
         
         for model_name in models_to_test:
             try:
-                model = GenerativeModel(model_name)
                 # Quick test to ensure it's actually usable
-                response = model.generate_content("Hi", generation_config={"max_output_tokens": 1})
+                response = client.models.generate_content(
+                    model=model_name,
+                    contents="Hi"
+                )
                 available_models.append(model_name)
             except Exception:
                 pass

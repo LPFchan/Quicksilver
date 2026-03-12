@@ -105,7 +105,7 @@ async def chat_completions(request: ChatCompletionRequest):
     
     try:
         # Call configured GCP backend
-        answer_text = vertex_client.converse(query=query, requested_model=request.model)
+        backend_response = vertex_client.converse(query=query, requested_model=request.model, stream=request.stream)
 
         response_id = f"chatcmpl-{uuid.uuid4().hex}"
         created_time = int(time.time())
@@ -123,17 +123,28 @@ async def chat_completions(request: ChatCompletionRequest):
                 }
                 yield f"data: {json.dumps(chunk)}\n\n"
                 
-                # Send the actual content chunk
-                # In a truly streaming backend we would yield words as they arrive,
-                # but since Vertex AI returns the full text at once, we yield it in one chunk.
-                chunk = {
-                    "id": response_id,
-                    "object": "chat.completion.chunk",
-                    "created": created_time,
-                    "model": request.model,
-                    "choices": [{"index": 0, "delta": {"content": str(answer_text)}, "finish_reason": None}]
-                }
-                yield f"data: {json.dumps(chunk)}\n\n"
+                # Check if backend_response is a string (Discovery Engine fallback) or a generator (GenAI SDK)
+                if isinstance(backend_response, str):
+                    chunk = {
+                        "id": response_id,
+                        "object": "chat.completion.chunk",
+                        "created": created_time,
+                        "model": request.model,
+                        "choices": [{"index": 0, "delta": {"content": backend_response}, "finish_reason": None}]
+                    }
+                    yield f"data: {json.dumps(chunk)}\n\n"
+                else:
+                    # It's a true stream from GenAI SDK
+                    for response_chunk in backend_response:
+                        if response_chunk.text:
+                            chunk = {
+                                "id": response_id,
+                                "object": "chat.completion.chunk",
+                                "created": created_time,
+                                "model": request.model,
+                                "choices": [{"index": 0, "delta": {"content": response_chunk.text}, "finish_reason": None}]
+                            }
+                            yield f"data: {json.dumps(chunk)}\n\n"
                 
                 # Send the final stop chunk
                 chunk = {
@@ -159,7 +170,7 @@ async def chat_completions(request: ChatCompletionRequest):
                     index=0,
                     message=ChatMessage(
                         role="assistant",
-                        content=str(answer_text)
+                        content=str(backend_response)
                     ),
                     finish_reason="stop"
                 )
