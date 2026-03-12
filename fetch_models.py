@@ -3,10 +3,6 @@ import sys
 import os
 import google.auth
 
-# Suppress standard error output so we don't clutter the terminal
-import warnings
-warnings.filterwarnings("ignore")
-
 def fetch_models(project_id, location):
     try:
         credentials, current_project = google.auth.default()
