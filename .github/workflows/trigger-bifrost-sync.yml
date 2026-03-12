@@ -1,0 +1,23 @@
+# Add this workflow to each repo you want to trigger Bifrost on push (Immogen, Whimbrel, Pipit, Quicksilver).
+# Copy to: .github/workflows/trigger-bifrost-sync.yml
+#
+# One-time in each repo: add secret BIFROST_DISPATCH_TOKEN (PAT with repo scope, or fine-grained
+# with "Actions: Write" on LPFchan/Bifrost).
+
+name: Trigger Bifrost sync
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  trigger:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Bifrost sync
+        run: |
+          curl -sS -X POST \
+            -H "Accept: application/vnd.github.v3+json" \
+            -H "Authorization: token ${{ secrets.BIFROST_DISPATCH_TOKEN }}" \
+            https://api.github.com/repos/LPFchan/Bifrost/dispatches \
+            -d '{"event_type":"sync"}'
