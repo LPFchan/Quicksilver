@@ -2,9 +2,13 @@ import os
 
 from google.cloud import discoveryengine_v1alpha as discoveryengine
 from google import genai
+import time
 from dotenv import load_dotenv
 
 load_dotenv()
+
+def log(msg):
+    print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {msg}")
 
 class VertexAISearchClient:
     def __init__(self):
@@ -13,19 +17,19 @@ class VertexAISearchClient:
         self.backend = os.getenv("QUICKSILVER_BACKEND", "DISCOVERY_ENGINE")
         
         if not self.project_id:
-            print("Warning: GOOGLE_CLOUD_PROJECT not set. Google Cloud APIs will not work.")
+            log("Warning: GOOGLE_CLOUD_PROJECT not set. Google Cloud APIs will not work.")
             return
 
         if self.backend == "DISCOVERY_ENGINE":
             self.data_store_id = os.getenv("DATA_STORE_ID")
             if not self.data_store_id:
-                print("Warning: DATA_STORE_ID not set. Vertex AI Search backend will fail.")
+                log("Warning: DATA_STORE_ID not set. Vertex AI Search backend will fail.")
                 return
                 
             self.search_client = discoveryengine.ConversationalSearchServiceClient()
             self.session_path_format = f"projects/{self.project_id}/locations/global/collections/default_collection/dataStores/{self.data_store_id}/sessions/{{}}"
             self.serving_config = f"projects/{self.project_id}/locations/global/collections/default_collection/dataStores/{self.data_store_id}/servingConfigs/default_config"
-            print(f"Initialized Quicksilver with Vertex AI Search (Data Store: {self.data_store_id})")
+            log(f"Initialized Quicksilver with Vertex AI Search (Data Store: {self.data_store_id})")
             
         elif self.backend == "GENERATIVE_MODELS":
             self.genai_client = genai.Client(
@@ -34,7 +38,7 @@ class VertexAISearchClient:
                 location=self.location
             )
             self.default_model = os.getenv("DEFAULT_MODEL", "gemini-2.5-pro")
-            print(f"Initialized Quicksilver with Google GenAI SDK (Default: {self.default_model})")
+            log(f"Initialized Quicksilver with Google GenAI SDK (Default: {self.default_model})")
 
     def converse(self, query: str, history: list = None, session_id: str = "-", requested_model: str = None, stream: bool = False):
         """

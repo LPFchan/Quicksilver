@@ -9,6 +9,17 @@ import uuid
 
 from gcp_client import VertexAISearchClient
 
+import uvicorn
+import os
+import logging
+from uvicorn.config import LOGGING_CONFIG
+
+# Configure custom formatting for uvicorn logs to include time+seconds
+LOGGING_CONFIG["formatters"]["default"]["fmt"] = "%(asctime)s - %(levelprefix)s %(message)s"
+LOGGING_CONFIG["formatters"]["access"]["fmt"] = "%(asctime)s - %(levelprefix)s %(client_addr)s - \"%(request_line)s\" %(status_code)s"
+LOGGING_CONFIG["formatters"]["default"]["datefmt"] = "%Y-%m-%d %H:%M:%S"
+LOGGING_CONFIG["formatters"]["access"]["datefmt"] = "%Y-%m-%d %H:%M:%S"
+
 app = FastAPI(title="Quicksilver", description="OpenAI API proxy for Vertex AI Search")
 
 app.add_middleware(
@@ -214,7 +225,7 @@ async def chat_completions(request: ChatCompletionRequest):
         )
         
     except Exception as e:
-        print(f"Error calling Vertex AI Search: {e}")
+        print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Error calling Vertex AI Search: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
