@@ -125,13 +125,23 @@ class VertexAISearchClient:
             search_results = getattr(response, "search_results", None) or getattr(response, "searchResults", None)
             if summary_skipped and search_results:
                 parts = []
-                for i, res in enumerate(search_results[:10], 1):
-                    title = getattr(res, "title", None) or (getattr(res, "document", None) and getattr(res.document, "title", None)) or f"Result {i}"
-                    snippet = getattr(res, "snippet", None) or getattr(res, "snippet_content", None)
+                for i, res in enumerate(list(search_results)[:10], 1):
+                    title = getattr(res, "title", None) or f"Result {i}"
                     if hasattr(res, "document") and res.document:
                         doc = res.document
-                        snippet = snippet or getattr(getattr(doc, "derived_struct_data", None), "snippet", None)
-                    text = snippet if snippet else str(getattr(res, "content", ""))[:500]
+                        title = getattr(doc, "title", None) or title
+                        struct = getattr(doc, "derived_struct_data", None)
+                        if struct and isinstance(struct, dict):
+                            snippet = struct.get("snippet") or struct.get("link") or ""
+                        else:
+                            snippet = getattr(struct, "snippet", None) if struct else None
+                    else:
+                        snippet = getattr(res, "snippet", None) or getattr(res, "snippet_content", None)
+                    text = (snippet or getattr(res, "content", "") or "").strip()
+                    if isinstance(text, bytes):
+                        text = text.decode("utf-8", errors="replace")[:500]
+                    else:
+                        text = str(text)[:500]
                     if text:
                         parts.append(f"**{title}**\n{text}")
                 if parts:

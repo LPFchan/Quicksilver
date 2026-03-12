@@ -42,6 +42,10 @@ So usage stays within the Gen AI 2025 offer when you use this proxy.
 
 Under the hood, Discovery Engine uses a Gemini-based **answer generation** model (e.g. `gemini-2.5-flash/answer_gen/v1`). The exact model is determined by your Data Store configuration in the Google Cloud Console, not by the request body.
 
+### “A summary could not be generated”
+
+Sometimes the API returns this and “Here are some search results” instead of an LLM summary (e.g. query out-of-domain, no relevant docs, or summary skipped by policy). Quicksilver appends the actual search result snippets to the reply when this happens so you still see what was retrieved. To get more summaries, use queries that match your indexed content and ensure the Data Store has enough relevant documents.
+
 ### Tool calling (Option C)
 
 Quicksilver supports **OpenAI-style tool/function calling** over Discovery Engine: it turns the client’s `tools` array into a prompt, and parses the model’s `<tool_call>…</tool_call>` output back into `tool_calls` for Cursor and other clients. This allows agent-style workflows (e.g. run terminal, read/write files) while still using only the Grounded Generation API.
