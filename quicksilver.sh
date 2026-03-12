@@ -97,10 +97,17 @@ else
     exit 1
 fi
 
+echo ""
+read -p "Enter the port number for Quicksilver to listen on [8000]: " PORT_CHOICE
+if [ -z "$PORT_CHOICE" ]; then
+    PORT_CHOICE=8000
+fi
+
 # Write configurations to .env
 echo "GOOGLE_CLOUD_PROJECT=$PROJECT_ID" > .env
 echo "LOCATION=$LOCATION" >> .env
 echo "QUICKSILVER_BACKEND=$API_BACKEND" >> .env
+echo "PORT=$PORT_CHOICE" >> .env
 if [ "$API_BACKEND" == "GENERATIVE_MODELS" ]; then
     echo "DEFAULT_MODEL=$SELECTED_MODEL" >> .env
 else

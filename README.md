@@ -42,13 +42,13 @@ source venv/bin/activate
 python main.py
 ```
 
-The server will start on `http://0.0.0.0:8000`.
+The server will start on `http://0.0.0.0:8000` (or whichever port you specified).
 
 ## Usage
 
 You can now point any OpenAI-compatible client to Quicksilver. 
 
-**Base URL:** `http://localhost:8000/v1`
+**Base URL:** `http://localhost:8000/v1` *(Replace 8000 if you chose a different port)*
 
 **Example cURL request:**
 
