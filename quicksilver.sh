@@ -1,8 +1,8 @@
 #!/bin/bash
 
-# Quicksilver Interactive Launcher
+# Quicksilver Interactive Launcher (Discovery Engine only)
 echo "=================================================="
-echo "          QUICKSILVER - API PROXY SETUP           "
+echo "     QUICKSILVER - DISCOVERY ENGINE PROXY         "
 echo "=================================================="
 echo ""
 
@@ -39,68 +39,22 @@ else
     echo "✅ Detected GCP Project: $PROJECT_ID"
 fi
 
-LOCATION="us-central1" # Default
+# Discovery Engine uses global location for data stores
+LOCATION="global"
 
 echo ""
-echo "Which backend would you like Quicksilver to use?"
-echo "1) Vertex AI Generative Models API (Raw Models like Gemini 2.5 Pro)"
-echo "2) Vertex AI Search / Discovery Engine API (Chat with your Data Store)"
+echo "To find your Data Store ID:"
+echo "  1. Go to Google Cloud Console → Search & Conversation (Vertex AI Agent Builder)"
+echo "  2. Click 'Data Stores' in the left menu"
+echo "  3. Copy the 'ID' (not the Display Name) of the Data Store you want to use"
 echo ""
-read -p "Enter 1 or 2: " BACKEND_CHOICE
+read -p "Enter your Vertex AI Search Data Store ID: " DATA_STORE_ID
 
-API_BACKEND=""
-SELECTED_MODEL=""
-DATA_STORE_ID=""
-
-if [ "$BACKEND_CHOICE" == "1" ]; then
-    API_BACKEND="GENERATIVE_MODELS"
-    echo ""
-    echo "Fetching available Gemini models for your project..."
-    
-    # Run the helper script to fetch models (ensuring we use absolute paths relative to script location)
-    SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
-    MODEL_LIST=$(python "$SCRIPT_DIR/fetch_models.py" "$PROJECT_ID" "$LOCATION")
-    
-    if [ $? -ne 0 ]; then
-        echo "❌ Error fetching models."
-        exit 1
-    fi
-    
-    echo "$MODEL_LIST"
-    
-    # Parse the output to create an array of models
-    # Using basic sed that works identically on both GNU (Linux) and BSD (macOS)
-    IFS=$'\n' read -r -d '' -a model_array <<< "$(echo "$MODEL_LIST" | grep '^[0-9]' | sed 's/^[0-9][0-9]*[)] //')"
-    
-    echo ""
-    read -p "Select a model by number: " MODEL_INDEX
-    
-    # Array is 0-indexed, UI is 1-indexed
-    ARRAY_INDEX=$((MODEL_INDEX - 1))
-    
-    if [ $ARRAY_INDEX -ge 0 ] && [ $ARRAY_INDEX -lt ${#model_array[@]} ]; then
-        SELECTED_MODEL=${model_array[$ARRAY_INDEX]}
-        echo "✅ Selected Model: $SELECTED_MODEL"
-    else
-        echo "❌ Invalid selection."
-        exit 1
-    fi
-
-elif [ "$BACKEND_CHOICE" == "2" ]; then
-    API_BACKEND="DISCOVERY_ENGINE"
-    LOCATION="global" # Discovery engine usually defaults to global
-    echo ""
-    echo "To find your Data Store ID:"
-    echo "1. Go to Google Cloud Console -> Search & Conversation (Vertex AI Agent Builder)"
-    echo "2. Click on 'Data Stores' in the left menu"
-    echo "3. Copy the 'ID' (not the Display Name) of the Data Store you want to use"
-    echo ""
-    read -p "Enter your Vertex AI Search Data Store ID: " DATA_STORE_ID
-    echo "✅ Configured for Discovery Engine using Data Store: $DATA_STORE_ID"
-else
-    echo "❌ Invalid choice."
+if [ -z "$DATA_STORE_ID" ]; then
+    echo "❌ Data Store ID is required."
     exit 1
 fi
+echo "✅ Configured for Discovery Engine using Data Store: $DATA_STORE_ID"
 
 echo ""
 read -p "Enter the port number for Quicksilver to listen on [8000]: " PORT_CHOICE
@@ -108,22 +62,20 @@ if [ -z "$PORT_CHOICE" ]; then
     PORT_CHOICE=8000
 fi
 
-# Write configurations to .env
+# Write configuration to .env
 echo "GOOGLE_CLOUD_PROJECT=$PROJECT_ID" > .env
 echo "LOCATION=$LOCATION" >> .env
-echo "QUICKSILVER_BACKEND=$API_BACKEND" >> .env
+echo "QUICKSILVER_BACKEND=DISCOVERY_ENGINE" >> .env
+echo "DATA_STORE_ID=$DATA_STORE_ID" >> .env
 echo "PORT=$PORT_CHOICE" >> .env
-if [ "$API_BACKEND" == "GENERATIVE_MODELS" ]; then
-    echo "DEFAULT_MODEL=$SELECTED_MODEL" >> .env
-else
-    echo "DATA_STORE_ID=$DATA_STORE_ID" >> .env
-fi
 
 echo ""
 echo "=================================================="
 echo "✅ Configuration saved to .env"
 echo "🚀 Starting Quicksilver Server..."
 echo "=================================================="
+echo ""
+echo "Tip: Query available answer-generation models with: curl http://localhost:$PORT_CHOICE/v1/models"
 echo ""
 
 # Run the server

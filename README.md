@@ -1,71 +1,88 @@
 # Quicksilver
 
-Quicksilver is a local proxy server that wraps Google Cloud's Vertex AI APIs, exposing an OpenAI API-compatible interface. This allows you to use standard AI tools and agents (like Cursor, AutoGPT, or LiteLLM) that expect to talk to an OpenAI-compatible endpoint to interact directly with Google's foundation models or your proprietary data stored in Vertex AI Search.
+Quicksilver is a local proxy server that exposes an **OpenAI API–compatible** interface to **Vertex AI Search (Discovery Engine)**. It lets you use standard AI tools and agents (Cursor, LiteLLM, etc.) to chat with your indexed data and run agent-style tool calls, while staying within **Vertex GenAI Offer 2025**–eligible SKUs (Grounded Generation / Advance Generative Answers).
 
 ## Requirements
 
 - Python 3.9+
 - A Google Cloud Project
-- Google Cloud credentials (e.g., `gcloud auth application-default login`)
-- (Optional) A Data Store created in Vertex AI Search (for the Discovery Engine backend)
+- Google Cloud credentials (e.g. `gcloud auth application-default login`)
+- A **Data Store** in Vertex AI Search (Search & Conversation / Agent Builder)
 
-## Installation & Setup
+## Installation & setup
 
-1. Clone the repository
-2. Run the interactive startup script:
+1. Clone the repository.
+2. Run the interactive launcher:
+
    ```bash
    ./quicksilver.sh
    ```
 
-The script will automatically:
-- Create a Python virtual environment (`venv`) and install dependencies (including the `google-genai` SDK and FastAPI).
-- Detect your current Google Cloud Project.
-- Allow you to choose between two backend modes.
-- If using Generative Models, dynamically probe Google's servers to see which Gemini models you have access to.
-- Ask which port you want the proxy to listen on (default 8000).
-- Save your choices to a `.env` file and launch the server.
+The script will:
 
-## Backend Modes
+- Create a Python virtual environment (`venv`) and install dependencies.
+- Detect your Google Cloud project (or prompt for it).
+- Ask for your **Vertex AI Search Data Store ID**.
+- Ask which port to use (default `8000`).
+- Write configuration to `.env` and start the server.
 
-### 1. Vertex AI Generative Models API (Raw Models)
-- Routes your standard OpenAI requests straight to Google's foundation models (like `gemini-2.5-pro`).
-- Supports multi-turn conversation memory, system prompts, and Server-Sent Events (SSE) streaming.
-- *Model Aliasing:* If an OpenAI client passes a specific model in the request payload (e.g., `"model": "gemini-2.0-flash"`), Quicksilver will attempt to use that specific model. If the client passes a generic alias (e.g., `"model": "quicksilver"`), it gracefully falls back to your configured default model.
+## Discovery Engine only
 
-### 2. Vertex AI Search (Discovery Engine API)
-- Routes your questions to a specific Data Store you have configured in the Google Cloud Console.
-- Relies on your indexed documents (PDFs, wikis, GitHub repos) to generate grounded answers using the conversational search API.
-- Requires a `DATA_STORE_ID`.
+Quicksilver uses **only** the Vertex AI Search / Discovery Engine API (`converseConversation`). There is no “raw” Generative Models API path. All requests are grounded through your Data Store and billed under:
+
+- **Vertex AI Search: Advance Generative Answers Request Count**
+- **Vertex AI Search: Grounded Generation**
+
+So usage stays within the Gen AI 2025 offer when you use this proxy.
+
+### Answer-generation model
+
+Under the hood, Discovery Engine uses a Gemini-based **answer generation** model (e.g. `gemini-2.5-flash/answer_gen/v1`). The exact model is determined by your Data Store configuration in the Google Cloud Console, not by the request body.
+
+### Tool calling (Option C)
+
+Quicksilver supports **OpenAI-style tool/function calling** over Discovery Engine: it turns the client’s `tools` array into a prompt, and parses the model’s `<tool_call>…</tool_call>` output back into `tool_calls` for Cursor and other clients. This allows agent-style workflows (e.g. run terminal, read/write files) while still using only the Grounded Generation API.
+
+## Querying available models
+
+You can ask the server which model options are available (for reference; the actual model is set on the Data Store):
+
+```bash
+curl http://localhost:8000/v1/models
+```
+
+Replace `8000` with your chosen port. The response lists Discovery Engine answer-generation model IDs and short descriptions (e.g. `stable`, `gemini-2.5-flash/answer_gen/v1`, `gemini-3.0-pro-preview/answer_gen/v1`).
 
 ## Usage with LiteLLM
 
-Quicksilver pairs perfectly with LiteLLM for routing. In your `~/.litellm/config.yaml`, add:
+Add a route in `~/.litellm/config.yaml`:
 
 ```yaml
 model_list:
   - model_name: quicksilver
     litellm_params:
       model: custom_openai/quicksilver
-      api_base: http://127.0.0.1:8000/v1  # Replace 8000 with your chosen port
+      api_base: http://127.0.0.1:8000/v1   # use your port
       api_key: dummy-key-not-used
 ```
 
-## Manual Server Start
+Then use the model name `quicksilver` in Cursor or any OpenAI-compatible client.
 
-If you already have a `.env` configured, you can start the server manually using Uvicorn:
+## Manual server start
+
+If `.env` is already set:
 
 ```bash
 source venv/bin/activate
 python main.py
 ```
-The server will start on `http://0.0.0.0:<PORT>`. You can point any OpenAI client to the Base URL: `http://localhost:<PORT>/v1`
 
-## SKU Compliance (Vertex GenAI Offer 2025)
+The server listens on `http://0.0.0.0:<PORT>`. Use base URL `http://localhost:<PORT>/v1` for OpenAI clients.
 
-Quicksilver is designed to strictly utilize API calls associated with the **Vertex GenAI Offer 2025** SKUs.
+## SKU compliance (Vertex GenAI Offer 2025)
 
-Depending on your backend choice, it will trigger the following eligible SKUs:
-*   **Generative Models Backend:** Triggers standard "Text Input - Predictions" and "Text Output - Predictions" SKUs for the selected Gemini models via the `google-genai` library.
-*   **Discovery Engine Backend:** Triggers the Conversational API (`converseConversation` method), billing the "Advance Generative Answers Request Count" and "Grounded Generation" SKUs.
-*   *Note: Third-party models (Anthropic, Meta) via Model Garden are not supported to maintain compliance with this offer.*
+Quicksilver is built to use only APIs that map to **Vertex GenAI Offer 2025** SKUs:
 
+- **Discovery Engine:** All traffic goes through the Conversational API and is billed as “Advance Generative Answers Request Count” and “Grounded Generation,” which are covered by the offer.
+
+See [docs/vertex-genai-offer-2025-sku-groups.md](docs/vertex-genai-offer-2025-sku-groups.md) for the full SKU list.

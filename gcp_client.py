@@ -1,8 +1,13 @@
 import os
+import re
 
 from google.cloud import discoveryengine_v1alpha as discoveryengine
 from google import genai
 from google.genai import errors as genai_errors
+import litellm
+from fastapi.responses import StreamingResponse
+import json
+import uuid
 import time
 from dotenv import load_dotenv
 
@@ -10,6 +15,7 @@ load_dotenv()
 
 def log(msg):
     print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {msg}")
+
 
 class VertexAISearchClient:
     def __init__(self):
@@ -26,7 +32,6 @@ class VertexAISearchClient:
             if not self.data_store_id:
                 log("Warning: DATA_STORE_ID not set. Vertex AI Search backend will fail.")
                 return
-                
             self.search_client = discoveryengine.ConversationalSearchServiceClient()
             self.session_path_format = f"projects/{self.project_id}/locations/global/collections/default_collection/dataStores/{self.data_store_id}/sessions/{{}}"
             self.serving_config = f"projects/{self.project_id}/locations/global/collections/default_collection/dataStores/{self.data_store_id}/servingConfigs/default_config"
@@ -41,56 +46,239 @@ class VertexAISearchClient:
             self.default_model = os.getenv("DEFAULT_MODEL", "gemini-2.5-pro")
             log(f"Initialized Quicksilver with Google GenAI SDK (Default: {self.default_model})")
 
-    def converse(self, query: str, history: list = None, session_id: str = "-", requested_model: str = None, stream: bool = False):
+    def converse(self, body: dict):
         """
         Sends a query to the configured backend.
         """
-        if history is None:
-            history = []
-            
         if self.backend == "DISCOVERY_ENGINE":
-            if not hasattr(self, 'search_client'):
-                raise Exception("Vertex AI Search client is not initialized. Check your environment variables.")
-
-            session = self.session_path_format.format(session_id)
-            query_obj = discoveryengine.TextInput(input=query)
+            # Extract tools if any
+            tools = body.get("tools", [])
             
+            # Reconstruct the logic to extract query for Discovery Engine from the raw OpenAI request format
+            messages = body.get("messages", [])
+            
+            system_prompt = ""
+            conversation_history = ""
+            
+            for msg in messages:
+                role = msg.get("role", "user")
+                content = msg.get("content", "")
+                
+                # Handle multimodal arrays
+                if isinstance(content, list):
+                    text_content = "\n".join([c.get("text", "") for c in content if isinstance(c, dict) and c.get("type") == "text"])
+                else:
+                    text_content = str(content) if content else ""
+                    
+                if role in ["system", "developer"]:
+                    system_prompt += text_content + "\n\n"
+                elif role == "user":
+                    conversation_history += f"User: {text_content}\n"
+                elif role == "assistant":
+                    conversation_history += f"Assistant: {text_content}\n"
+                    # Include tool calls made by the assistant if they exist
+                    if msg.get("tool_calls"):
+                        for tc in msg.get("tool_calls"):
+                            func = tc.get("function", {})
+                            conversation_history += f"Assistant called tool {func.get('name')} with arguments {func.get('arguments')}\n"
+                elif role == "tool":
+                    conversation_history += f"Tool Result (from {msg.get('name', 'unknown')}): {text_content}\n"
+
+            # If we have tools, we inject our mega-prompt instruction
+            tool_instruction = ""
+            if tools:
+                tool_instruction = "\n\nCRITICAL INSTRUCTION: You are an autonomous AI agent. You have access to the following tools to help the user:\n"
+                tool_instruction += json.dumps(tools, indent=2)
+                tool_instruction += "\n\nIf you need to use a tool to accomplish the task, you MUST reply with ONLY the following XML format and absolutely no other text:\n"
+                tool_instruction += "<tool_call>\n{\"name\": \"tool_name\", \"arguments\": {\"arg1\": \"val1\"}}\n</tool_call>"
+
+            # Combine it all into the single query Vertex AI Search expects
+            final_query = f"{system_prompt.strip()}\n\nConversation History:\n{conversation_history}{tool_instruction}".strip()
+
+            if not hasattr(self, "search_client"):
+                raise Exception("Vertex AI Search client is not initialized. Check your environment variables (DATA_STORE_ID).")
+
+            session_id = "-"
+            session = self.session_path_format.format(session_id)
+            query_obj = discoveryengine.TextInput(input=final_query)
             request = discoveryengine.ConverseConversationRequest(
                 name=session,
                 query=query_obj,
                 serving_config=self.serving_config,
             )
-            
             response = self.search_client.converse_conversation(request)
-            
+            text_reply = "I'm sorry, I couldn't generate an answer from the provided documents."
             if response.reply and response.reply.reply:
-                return response.reply.reply
-            elif response.reply and hasattr(response.reply, 'summary') and response.reply.summary.summary_text:
-                return response.reply.summary.summary_text
+                text_reply = response.reply.reply
+            elif response.reply and hasattr(response.reply, "summary") and response.reply.summary.summary_text:
+                text_reply = response.reply.summary.summary_text
+                
+            stream = body.get("stream", False)
+            model_name = body.get("model", "discovery-engine")
+            response_id = f"chatcmpl-{uuid.uuid4().hex}"
+            created_time = int(time.time())
+
+            # Detect if the model outputted a tool call
+            tool_call_match = re.search(r'<tool_call>\s*({.*?})\s*</tool_call>', text_reply, re.DOTALL)
+            parsed_tool_call = None
+            if tool_call_match:
+                try:
+                    parsed_tool_call = json.loads(tool_call_match.group(1))
+                    # Fallback text reply to empty if we're calling a tool, or keep the thought process if there's text outside the tag
+                    text_reply = text_reply.replace(tool_call_match.group(0), "").strip()
+                except Exception as e:
+                    print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Failed to parse tool call JSON: {e}")
+
+            if stream:
+                async def generate_stream():
+                    # Send role
+                    yield f"data: {json.dumps({'id': response_id, 'object': 'chat.completion.chunk', 'created': created_time, 'model': model_name, 'choices': [{'index': 0, 'delta': {'role': 'assistant'}, 'finish_reason': None}]})}\n\n"
+                    
+                    if parsed_tool_call:
+                        # Yield the tool call chunk exactly as OpenAI/Cursor expects it
+                        tool_call_id = f"call_{uuid.uuid4().hex[:10]}"
+                        
+                        # Cursor expects tool calls to be streamed in parts (index, id, function name, then arguments string)
+                        tc_chunk_1 = {
+                            "id": response_id,
+                            "object": "chat.completion.chunk",
+                            "created": created_time,
+                            "model": model_name,
+                            "choices": [{
+                                "index": 0,
+                                "delta": {
+                                    "tool_calls": [{
+                                        "index": 0,
+                                        "id": tool_call_id,
+                                        "type": "function",
+                                        "function": {
+                                            "name": parsed_tool_call.get("name", ""),
+                                            "arguments": ""
+                                        }
+                                    }]
+                                },
+                                "finish_reason": None
+                            }]
+                        }
+                        yield f"data: {json.dumps(tc_chunk_1)}\n\n"
+                        
+                        tc_chunk_2 = {
+                            "id": response_id,
+                            "object": "chat.completion.chunk",
+                            "created": created_time,
+                            "model": model_name,
+                            "choices": [{
+                                "index": 0,
+                                "delta": {
+                                    "tool_calls": [{
+                                        "index": 0,
+                                        "function": {
+                                            "arguments": json.dumps(parsed_tool_call.get("arguments", {}))
+                                        }
+                                    }]
+                                },
+                                "finish_reason": None
+                            }]
+                        }
+                        yield f"data: {json.dumps(tc_chunk_2)}\n\n"
+                        
+                        # Stop reason should be "tool_calls"
+                        yield f"data: {json.dumps({'id': response_id, 'object': 'chat.completion.chunk', 'created': created_time, 'model': model_name, 'choices': [{'index': 0, 'delta': {}, 'finish_reason': 'tool_calls'}]})}\n\n"
+                    
+                    else:
+                        # Standard text response
+                        yield f"data: {json.dumps({'id': response_id, 'object': 'chat.completion.chunk', 'created': created_time, 'model': model_name, 'choices': [{'index': 0, 'delta': {'content': text_reply}, 'finish_reason': None}]})}\n\n"
+                        yield f"data: {json.dumps({'id': response_id, 'object': 'chat.completion.chunk', 'created': created_time, 'model': model_name, 'choices': [{'index': 0, 'delta': {}, 'finish_reason': 'stop'}]})}\n\n"
+                    
+                    yield "data: [DONE]\n\n"
+                return StreamingResponse(generate_stream(), media_type="text/event-stream")
             else:
-                return "I'm sorry, I couldn't generate an answer from the provided documents."
+                # Non-streaming response format
+                choice_data = {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant"
+                    }
+                }
+                
+                if parsed_tool_call:
+                    choice_data["message"]["content"] = None
+                    choice_data["message"]["tool_calls"] = [{
+                        "id": f"call_{uuid.uuid4().hex[:10]}",
+                        "type": "function",
+                        "function": {
+                            "name": parsed_tool_call.get("name", ""),
+                            "arguments": json.dumps(parsed_tool_call.get("arguments", {}))
+                        }
+                    }]
+                    choice_data["finish_reason"] = "tool_calls"
+                else:
+                    choice_data["message"]["content"] = text_reply
+                    choice_data["finish_reason"] = "stop"
+
+                return {
+                    "id": response_id,
+                    "object": "chat.completion",
+                    "created": created_time,
+                    "model": model_name,
+                    "choices": [choice_data],
+                    "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+                }
                 
         elif self.backend == "GENERATIVE_MODELS":
-            # If the user passes a model name that doesn't start with "gemini-", they are likely 
-            # just passing their proxy's generic route name (like "quicksilver").
+            # Just pass everything over to LiteLLM, which natively handles tools, streams, etc.
+            # Use "gemini/..." prefix to ensure LiteLLM routes through the new `google-genai` SDK
+            # instead of the older `google-cloud-aiplatform` SDK. This ensures Gen AI 2025 promotional
+            # billing is properly applied.
+            requested_model = body.get("model", "")
             model_name = requested_model if requested_model and requested_model.startswith("gemini-") else self.default_model
+            litellm_model = f"gemini/{model_name}"
+
+            # Prepare args for litellm.completion
+            litellm_args = body.copy()
+            litellm_args["model"] = litellm_model
+            
+            # Passing these explicitly tells the `gemini/` provider in LiteLLM to use 
+            # Vertex AI credentials (genai.Client(vertexai=True)) rather than an AI Studio API key.
+            litellm_args["vertex_project"] = self.project_id
+            litellm_args["vertex_location"] = self.location
+
+            stream = body.get("stream", False)
+            
             try:
+                response = litellm.completion(**litellm_args)
+
                 if stream:
-                    # Create a chat session with history, then stream the new message
-                    chat = self.genai_client.chats.create(
-                        model=model_name,
-                        history=history
-                    )
-                    return chat.send_message_stream(query)
+                    # litellm returns a generator for streams, we need to wrap it in a FastAPI StreamingResponse
+                    async def generate_stream():
+                        for chunk in response:
+                            # LiteLLM yields chunks. We need strictly valid JSON strings with double quotes.
+                            if hasattr(chunk, "model_dump_json"):
+                                chunk_json = chunk.model_dump_json()
+                            elif hasattr(chunk, "json") and callable(getattr(chunk, "json")):
+                                # Some litellm objects return a dict when json() is called, some return a string.
+                                val = chunk.json()
+                                chunk_json = json.dumps(val) if isinstance(val, dict) else val
+                                # Quick fix if the string still has single quotes (often from str())
+                                if isinstance(chunk_json, str) and chunk_json.startswith("{'") :
+                                    chunk_json = json.dumps(chunk.model_dump() if hasattr(chunk, "model_dump") else dict(chunk))
+                            elif hasattr(chunk, "model_dump"):
+                                chunk_json = json.dumps(chunk.model_dump())
+                            else:
+                                # Fallback to standard dict conversion
+                                chunk_json = json.dumps(dict(chunk) if hasattr(chunk, "keys") else chunk)
+                                
+                            yield f"data: {chunk_json}\n\n"
+                        yield "data: [DONE]\n\n"
+                    return StreamingResponse(generate_stream(), media_type="text/event-stream")
                 else:
-                    chat = self.genai_client.chats.create(
-                        model=model_name,
-                        history=history
-                    )
-                    response = chat.send_message(query)
-                    return response.text
-            except genai_errors.ClientError:
-                raise
+                    return response.model_dump()
+            except litellm.exceptions.AuthenticationError as e:
+                raise Exception(f"Authentication failed: {e}")
+            except litellm.exceptions.RateLimitError as e:
+                # We can mock a GenAIClientError to be caught by main.py
+                raise genai_errors.ClientError(code=429, response_json={"error": {"message": str(e)}}, response=None)
             except Exception as e:
-                raise Exception(f"Failed to generate content using {model_name}: {e}")
+                # Wrap general litellm errors so we know where they came from
+                raise Exception(f"LiteLLM error calling {litellm_model}: {e}")
 

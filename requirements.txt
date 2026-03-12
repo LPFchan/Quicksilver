@@ -6,3 +6,4 @@ google-genai>=1.66.0
 python-dotenv==1.2.2
 pydantic==2.12.5
 requests==2.32.5
+litellm>=1.61.16
