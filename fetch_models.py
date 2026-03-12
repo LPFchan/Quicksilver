@@ -22,6 +22,7 @@ def fetch_models(project_id, location):
             "gemini-3.0-flash",
             "gemini-3.0-pro",
             "gemini-3.1-pro",
+            "gemini-3.1-flash",
             "gemini-3.1-flash-lite",
             "gemini-1.5-pro",
             "gemini-1.5-flash",

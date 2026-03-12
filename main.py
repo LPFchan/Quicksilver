@@ -1,6 +1,7 @@
 from fastapi import FastAPI, HTTPException, Request, Depends
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
+import json
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any, Union
 import time
@@ -106,10 +107,48 @@ async def chat_completions(request: ChatCompletionRequest):
         # Call configured GCP backend
         answer_text = vertex_client.converse(query=query, requested_model=request.model)
 
-        # Format as OpenAI response
         response_id = f"chatcmpl-{uuid.uuid4().hex}"
         created_time = int(time.time())
+
+        # If the client requested a streaming response, we need to return server-sent events (SSE)
+        if request.stream:
+            async def generate_stream():
+                # Send the initial role chunk
+                chunk = {
+                    "id": response_id,
+                    "object": "chat.completion.chunk",
+                    "created": created_time,
+                    "model": request.model,
+                    "choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}]
+                }
+                yield f"data: {json.dumps(chunk)}\n\n"
+                
+                # Send the actual content chunk
+                # In a truly streaming backend we would yield words as they arrive,
+                # but since Vertex AI returns the full text at once, we yield it in one chunk.
+                chunk = {
+                    "id": response_id,
+                    "object": "chat.completion.chunk",
+                    "created": created_time,
+                    "model": request.model,
+                    "choices": [{"index": 0, "delta": {"content": str(answer_text)}, "finish_reason": None}]
+                }
+                yield f"data: {json.dumps(chunk)}\n\n"
+                
+                # Send the final stop chunk
+                chunk = {
+                    "id": response_id,
+                    "object": "chat.completion.chunk",
+                    "created": created_time,
+                    "model": request.model,
+                    "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]
+                }
+                yield f"data: {json.dumps(chunk)}\n\n"
+                yield "data: [DONE]\n\n"
+
+            return StreamingResponse(generate_stream(), media_type="text/event-stream")
         
+        # If not streaming, format as standard OpenAI JSON response
         return ChatCompletionResponse(
             id=response_id,
             object="chat.completion",
