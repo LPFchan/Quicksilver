@@ -54,7 +54,17 @@ if [ -z "$DATA_STORE_ID" ]; then
     echo "❌ Data Store ID is required."
     exit 1
 fi
-echo "✅ Configured for Discovery Engine using Data Store: $DATA_STORE_ID"
+echo "✅ Data Store: $DATA_STORE_ID"
+
+echo ""
+echo "Search App ID (needed for LLM / generative responses):"
+echo "  Search & Conversation → Apps → your app → copy the App ID."
+echo "  Leave blank if you only have a Data Store and no Search App yet."
+echo ""
+read -p "Enter App ID: " SEARCH_APP_ID
+if [ -n "$SEARCH_APP_ID" ]; then
+    echo "✅ App ID: $SEARCH_APP_ID"
+fi
 
 echo ""
 read -p "Enter the port number for Quicksilver to listen on [8000]: " PORT_CHOICE
@@ -67,6 +77,7 @@ echo "GOOGLE_CLOUD_PROJECT=$PROJECT_ID" > .env
 echo "LOCATION=$LOCATION" >> .env
 echo "QUICKSILVER_BACKEND=DISCOVERY_ENGINE" >> .env
 echo "DATA_STORE_ID=$DATA_STORE_ID" >> .env
+[ -n "$SEARCH_APP_ID" ] && echo "SEARCH_APP_ID=$SEARCH_APP_ID" >> .env
 echo "PORT=$PORT_CHOICE" >> .env
 
 echo ""

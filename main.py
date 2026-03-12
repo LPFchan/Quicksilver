@@ -6,6 +6,11 @@ import time
 from gcp_client import VertexAISearchClient
 from google.genai.errors import ClientError as GenAIClientError
 
+try:
+    from google.api_core.exceptions import ResourceExhausted
+except ImportError:
+    ResourceExhausted = None  # optional for non–Discovery Engine backends
+
 import uvicorn
 import os
 import logging
@@ -81,8 +86,34 @@ async def chat_completions(request: Request):
         print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Vertex AI error ({status_code}): {e}")
         raise HTTPException(status_code=status_code, detail=str(e))
     except Exception as e:
+        # Discovery Engine quota: 10 LLM requests/min per project. Return 429 so clients can retry.
+        is_rate_limit = (
+            (ResourceExhausted is not None and isinstance(e, ResourceExhausted))
+            or "429" in str(e)
+            or "Quota exceeded" in str(e)
+            or "RATE_LIMIT_EXCEEDED" in str(e)
+        )
+        if is_rate_limit:
+            print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Rate limit (429): {e}")
+            raise HTTPException(
+                status_code=429,
+                detail="Discovery Engine quota exceeded (10 LLM requests/min per project). Retry after a minute or request a quota increase: https://cloud.google.com/docs/quotas/help/request_increase",
+                headers={"Retry-After": "60"},
+            )
+        # Pass through 400-style errors from Discovery Engine so clients get correct status
+        err_str = str(e)
+        # LLM add-on not enabled on the Data Store — return actionable message
+        if "large language model add-on" in err_str.lower() or "llm add-on" in err_str.lower():
+            print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] LLM add-on not enabled (400): {e}")
+            raise HTTPException(
+                status_code=400,
+                detail="Vertex AI Search LLM add-on is not enabled. Create a Search App in Agent Builder with 'Generative responses with advanced LLM features' enabled, then set SEARCH_APP_ID in .env to that app's ID. See: https://cloud.google.com/generative-ai-app-builder/docs/create-engine-es",
+            )
+        if "400" in err_str or "invalid argument" in err_str.lower():
+            print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Bad request (400): {e}")
+            raise HTTPException(status_code=400, detail=err_str)
         print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Error calling Vertex AI Search: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=err_str)
 
 if __name__ == "__main__":
     import uvicorn

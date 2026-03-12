@@ -7,7 +7,7 @@ Quicksilver is a local proxy server that exposes an **OpenAI API–compatible** 
 - Python 3.9+
 - A Google Cloud Project
 - Google Cloud credentials (e.g. `gcloud auth application-default login`)
-- A **Data Store** in Vertex AI Search (Search & Conversation / Agent Builder)
+- A **Data Store** in Vertex AI Search (Search & Conversation / Agent Builder). For LLM/converse features you also need a **Search App** with “Generative responses with advanced LLM features” enabled; set `SEARCH_APP_ID` to that app’s ID (see below).
 
 ## Installation & setup
 
@@ -23,8 +23,11 @@ The script will:
 - Create a Python virtual environment (`venv`) and install dependencies.
 - Detect your Google Cloud project (or prompt for it).
 - Ask for your **Vertex AI Search Data Store ID**.
+- Optionally ask for your **Search App ID** (recommended if you use a Search App with LLM/generative responses enabled).
 - Ask which port to use (default `8000`).
 - Write configuration to `.env` and start the server.
+
+**Search App ID (optional):** The converse API can be called with either a Data Store or a Search App (engine). If you get “Large Language Model add-on is not enabled”, create a Search App in Agent Builder, turn on “Generative responses with advanced LLM features”, and set `SEARCH_APP_ID` in `.env` to that app’s ID. Quicksilver will then use the engine path (`.../engines/{SEARCH_APP_ID}/conversations/-`) so the LLM add-on is used.
 
 ## Discovery Engine only
 

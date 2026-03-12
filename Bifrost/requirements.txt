@@ -1,3 +1,0 @@
-google-cloud-discoveryengine
-google-cloud-storage
-GitPython

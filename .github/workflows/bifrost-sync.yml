@@ -1,0 +1,75 @@
+# Sync multiple LPFchan repos to Vertex AI Search (one data store).
+# Secrets (Settings → Secrets and variables → Actions): GCP_SA_KEY, GCP_PROJECT_ID, BIFROST_GCS_BUCKET.
+# The key is stored only as an encrypted secret—never in the repo or logs.
+
+name: Bifrost sync to Vertex AI Search
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'Bifrost/**'
+      - '.github/workflows/bifrost-sync.yml'
+  workflow_dispatch:  # Manual run: Actions → Bifrost sync → Run workflow
+
+env:
+  PYTHON_VERSION: "3.11"
+  REPOS: "Immogen Whimbrel Pipit Bifrost"
+  ORG: "LPFchan"
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Quicksilver (this repo, contains Bifrost)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Clone other repos
+        run: |
+          for repo in ${{ env.REPOS }}; do
+            if [ "$repo" = "Bifrost" ]; then
+              git clone --depth 1 https://github.com/${{ env.ORG }}/$repo.git Bifrost-repo || true
+            else
+              git clone --depth 1 https://github.com/${{ env.ORG }}/$repo.git "$repo" || true
+            fi
+          done
+        # For private repos: add secret GH_PAT (PAT with repo scope) and use:
+        # git clone https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ env.ORG }}/$repo.git ...
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install Bifrost dependencies
+        run: pip install -r Bifrost/requirements.txt
+
+      - name: Authenticate to Google Cloud
+        env:
+          GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
+        run: |
+          if [ -z "$GCP_SA_KEY" ]; then
+            echo "::error::GCP_SA_KEY secret is not set."
+            exit 1
+          fi
+          echo "$GCP_SA_KEY" > "$RUNNER_TEMP/sa-key.json"
+          echo "GOOGLE_APPLICATION_CREDENTIALS=$RUNNER_TEMP/sa-key.json" >> "$GITHUB_ENV"
+
+      - name: Run Bifrost (sync all repos to one data store)
+        env:
+          GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+          BIFROST_GCS_BUCKET: ${{ secrets.BIFROST_GCS_BUCKET }}
+        run: |
+          if [ -z "$GCP_PROJECT_ID" ]; then
+            echo "::error::GCP_PROJECT_ID secret is not set."
+            exit 1
+          fi
+          BUCKET="${BIFROST_GCS_BUCKET:-bifrost-bucket}"
+          python Bifrost/main.py \
+            --project-id "$GCP_PROJECT_ID" \
+            --bucket "$BUCKET" \
+            --skip-create-datastore \
+            . Immogen Whimbrel Pipit Bifrost-repo
+        working-directory: ${{ github.workspace }}

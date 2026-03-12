@@ -29,13 +29,20 @@ class VertexAISearchClient:
 
         if self.backend == "DISCOVERY_ENGINE":
             self.data_store_id = os.getenv("DATA_STORE_ID")
+            self.search_app_id = os.getenv("SEARCH_APP_ID")  # optional: engine ID when LLM is enabled on the Search App
             if not self.data_store_id:
                 log("Warning: DATA_STORE_ID not set. Vertex AI Search backend will fail.")
                 return
             self.search_client = discoveryengine.ConversationalSearchServiceClient()
-            self.session_path_format = f"projects/{self.project_id}/locations/global/collections/default_collection/dataStores/{self.data_store_id}/sessions/{{}}"
+            # serving_config must always be dataStores/.../servingConfigs/... (API rejects engines path for this field)
             self.serving_config = f"projects/{self.project_id}/locations/global/collections/default_collection/dataStores/{self.data_store_id}/servingConfigs/default_config"
-            log(f"Initialized Quicksilver with Vertex AI Search (Data Store: {self.data_store_id})")
+            # Conversation name: use engine (Search App) path when SEARCH_APP_ID set (LLM add-on), else data store path
+            if self.search_app_id:
+                self.conversation_path_format = f"projects/{self.project_id}/locations/global/collections/default_collection/engines/{self.search_app_id}/conversations/{{}}"
+                log(f"Initialized Quicksilver with Vertex AI Search (Search App: {self.search_app_id}, Data Store: {self.data_store_id})")
+            else:
+                self.conversation_path_format = f"projects/{self.project_id}/locations/global/collections/default_collection/dataStores/{self.data_store_id}/conversations/{{}}"
+                log(f"Initialized Quicksilver with Vertex AI Search (Data Store: {self.data_store_id})")
             
         elif self.backend == "GENERATIVE_MODELS":
             self.genai_client = genai.Client(
@@ -98,11 +105,11 @@ class VertexAISearchClient:
             if not hasattr(self, "search_client"):
                 raise Exception("Vertex AI Search client is not initialized. Check your environment variables (DATA_STORE_ID).")
 
-            session_id = "-"
-            session = self.session_path_format.format(session_id)
+            conversation_id = "-"  # auto session mode: API creates a new conversation
+            conversation_name = self.conversation_path_format.format(conversation_id)
             query_obj = discoveryengine.TextInput(input=final_query)
             request = discoveryengine.ConverseConversationRequest(
-                name=session,
+                name=conversation_name,
                 query=query_obj,
                 serving_config=self.serving_config,
             )
@@ -112,7 +119,24 @@ class VertexAISearchClient:
                 text_reply = response.reply.reply
             elif response.reply and hasattr(response.reply, "summary") and response.reply.summary.summary_text:
                 text_reply = response.reply.summary.summary_text
-                
+
+            # When the API skips the LLM summary it returns a fallback message; append actual search results so the user sees them
+            summary_skipped = "summary could not be generated" in text_reply.lower() or "here are some search results" in text_reply.lower()
+            search_results = getattr(response, "search_results", None) or getattr(response, "searchResults", None)
+            if summary_skipped and search_results:
+                parts = []
+                for i, res in enumerate(search_results[:10], 1):
+                    title = getattr(res, "title", None) or (getattr(res, "document", None) and getattr(res.document, "title", None)) or f"Result {i}"
+                    snippet = getattr(res, "snippet", None) or getattr(res, "snippet_content", None)
+                    if hasattr(res, "document") and res.document:
+                        doc = res.document
+                        snippet = snippet or getattr(getattr(doc, "derived_struct_data", None), "snippet", None)
+                    text = snippet if snippet else str(getattr(res, "content", ""))[:500]
+                    if text:
+                        parts.append(f"**{title}**\n{text}")
+                if parts:
+                    text_reply = text_reply.rstrip() + "\n\n---\n\n" + "\n\n".join(parts)
+
             stream = body.get("stream", False)
             model_name = body.get("model", "discovery-engine")
             response_id = f"chatcmpl-{uuid.uuid4().hex}"
