@@ -90,6 +90,11 @@ elif [ "$BACKEND_CHOICE" == "2" ]; then
     API_BACKEND="DISCOVERY_ENGINE"
     LOCATION="global" # Discovery engine usually defaults to global
     echo ""
+    echo "To find your Data Store ID:"
+    echo "1. Go to Google Cloud Console -> Search & Conversation (Vertex AI Agent Builder)"
+    echo "2. Click on 'Data Stores' in the left menu"
+    echo "3. Copy the 'ID' (not the Display Name) of the Data Store you want to use"
+    echo ""
     read -p "Enter your Vertex AI Search Data Store ID: " DATA_STORE_ID
     echo "✅ Configured for Discovery Engine using Data Store: $DATA_STORE_ID"
 else
