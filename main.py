@@ -83,8 +83,11 @@ async def chat_completions(request: ChatCompletionRequest):
     if not request.messages:
         raise HTTPException(status_code=400, detail="Messages cannot be empty")
 
-    # Extract the last user message as the query
     # In a more advanced version, we could handle conversational history
+    # We now format the entire conversation history for Vertex AI
+    formatted_messages = []
+    
+    # We need to extract the query from the last message (what we will actually "send" as the prompt)
     user_messages = [msg for msg in request.messages if msg.role == "user"]
     if not user_messages:
         raise HTTPException(status_code=400, detail="No user message found")
@@ -102,10 +105,38 @@ async def chat_completions(request: ChatCompletionRequest):
     query = query.strip()
     if not query:
         raise HTTPException(status_code=400, detail="User message content cannot be empty")
+        
+    # Build the conversation history for GenAI SDK (Vertex AI expects a specific format)
+    # The last message is the query, the preceding messages are history.
+    history = []
+    if len(request.messages) > 1:
+        for msg in request.messages[:-1]:
+            # Convert system messages to user messages for Gemini (if it doesn't support system instructions at this layer)
+            role = "user" if msg.role in ["user", "system"] else "model"
+            
+            # Extract content string
+            content_str = ""
+            if isinstance(msg.content, list):
+                for block in msg.content:
+                    if isinstance(block, dict) and block.get("type") == "text":
+                        content_str += block.get("text", "") + "\n"
+            else:
+                content_str = str(msg.content)
+            
+            if content_str.strip():
+                history.append({
+                    "role": role,
+                    "parts": [{"text": content_str}]
+                })
     
     try:
         # Call configured GCP backend
-        backend_response = vertex_client.converse(query=query, requested_model=request.model, stream=request.stream)
+        backend_response = vertex_client.converse(
+            query=query, 
+            history=history,
+            requested_model=request.model, 
+            stream=request.stream
+        )
 
         response_id = f"chatcmpl-{uuid.uuid4().hex}"
         created_time = int(time.time())

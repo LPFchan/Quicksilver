@@ -36,10 +36,13 @@ class VertexAISearchClient:
             self.default_model = os.getenv("DEFAULT_MODEL", "gemini-2.5-pro")
             print(f"Initialized Quicksilver with Google GenAI SDK (Default: {self.default_model})")
 
-    def converse(self, query: str, session_id: str = "-", requested_model: str = None, stream: bool = False):
+    def converse(self, query: str, history: list = None, session_id: str = "-", requested_model: str = None, stream: bool = False):
         """
         Sends a query to the configured backend.
         """
+        if history is None:
+            history = []
+            
         if self.backend == "DISCOVERY_ENGINE":
             if not hasattr(self, 'search_client'):
                 raise Exception("Vertex AI Search client is not initialized. Check your environment variables.")
@@ -68,16 +71,18 @@ class VertexAISearchClient:
             model_name = requested_model if requested_model and requested_model.startswith("gemini-") else self.default_model
             try:
                 if stream:
-                    # Return the generator directly for streaming
-                    return self.genai_client.models.generate_content_stream(
+                    # Create a chat session with history, then stream the new message
+                    chat = self.genai_client.chats.create(
                         model=model_name,
-                        contents=query
+                        history=history
                     )
+                    return chat.send_message_stream(query)
                 else:
-                    response = self.genai_client.models.generate_content(
+                    chat = self.genai_client.chats.create(
                         model=model_name,
-                        contents=query
+                        history=history
                     )
+                    response = chat.send_message(query)
                     return response.text
             except Exception as e:
                 raise Exception(f"Failed to generate content using {model_name}: {e}")
