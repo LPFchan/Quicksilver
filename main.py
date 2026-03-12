@@ -2,7 +2,7 @@ from fastapi import FastAPI, HTTPException, Request, Depends
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Union
 import time
 import uuid
 
@@ -23,7 +23,7 @@ vertex_client = VertexAISearchClient()
 # OpenAI Compatible Models
 class ChatMessage(BaseModel):
     role: str
-    content: str
+    content: Union[str, List[Dict[str, Any]]]
 
 class ChatCompletionRequest(BaseModel):
     model: str
@@ -88,7 +88,19 @@ async def chat_completions(request: ChatCompletionRequest):
     if not user_messages:
         raise HTTPException(status_code=400, detail="No user message found")
         
-    query = user_messages[-1].content
+    query = ""
+    last_content = user_messages[-1].content
+    if isinstance(last_content, list):
+        # Handle cases where content is a list of dictionaries (e.g. multimodal or complex text blocks from LiteLLM/Cursor)
+        for block in last_content:
+            if isinstance(block, dict) and block.get("type") == "text":
+                query += block.get("text", "") + "\n"
+    else:
+        query = str(last_content)
+        
+    query = query.strip()
+    if not query:
+        raise HTTPException(status_code=400, detail="User message content cannot be empty")
     
     try:
         # Call configured GCP backend
@@ -108,7 +120,7 @@ async def chat_completions(request: ChatCompletionRequest):
                     index=0,
                     message=ChatMessage(
                         role="assistant",
-                        content=answer_text
+                        content=str(answer_text)
                     ),
                     finish_reason="stop"
                 )
