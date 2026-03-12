@@ -69,7 +69,10 @@ class VertexAISearchClient:
                 return "I'm sorry, I couldn't generate an answer from the provided documents."
                 
         elif self.backend == "GENERATIVE_MODELS":
-            model_name = requested_model if requested_model and requested_model != "vertex-ai-search" else self.default_model
+            # If the user passes a model name that doesn't start with "gemini-", they are likely 
+            # just passing their proxy's generic route name (like "quicksilver").
+            # In that case, we should fallback to the default model configured in .env.
+            model_name = requested_model if requested_model and requested_model.startswith("gemini-") else self.default_model
             try:
                 model = GenerativeModel(model_name)
                 response = model.generate_content(query)
